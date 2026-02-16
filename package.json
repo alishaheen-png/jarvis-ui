@@ -12,7 +12,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/jincocodev/openclaw-jarvis.git"
+    "url": "git+https://github.com/jincocodev/openclaw-jarvis-ui-ui.git"
   },
   "keywords": [
     "openclaw",
@@ -26,9 +26,9 @@
   "license": "ISC",
   "type": "module",
   "bugs": {
-    "url": "https://github.com/jincocodev/openclaw-jarvis/issues"
+    "url": "https://github.com/jincocodev/openclaw-jarvis-ui-ui/issues"
   },
-  "homepage": "https://github.com/jincocodev/openclaw-jarvis#readme",
+  "homepage": "https://github.com/jincocodev/openclaw-jarvis-ui-ui#readme",
   "devDependencies": {
     "concurrently": "^9.2.1",
     "vite": "^7.3.1"
