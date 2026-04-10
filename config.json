@@ -2,7 +2,7 @@
   "name": "JARVIS",
   "agent": {
     "name": "JARVIS",
-    "emoji": "🤖",
+    "emoji": "",
     "sessionKey": "agent:main:main",
     "skills": []
   },
@@ -14,11 +14,15 @@
     "voice": "Samantha",
     "maxChars": 500,
     "engine": "edge",
-    "edgeVoice": "en-US-AriaNeural",
-    "edgeVoiceAlt": "zh-TW-HsiaoChenNeural"
+    "edgeVoice": "en-US-ChristopherNeural",
+    "edgeVoiceAlt": "en-US-BrianNeural"
   },
   "theme": {
-    "accentPrimary": "#ff4e42",
-    "accentSecondary": "#c0392b"
+    "accentPrimary": "#3b82f6",
+    "accentSecondary": "#06b6d4"
+  },
+  "vapi": {
+    "publicKey": "d9b4177c-216e-4aef-9061-5fab1262b57a",
+    "assistantId": "bd07af92-2f50-4c7e-be38-95d0438ac6e9"
   }
 }

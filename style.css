@@ -1135,6 +1135,42 @@ textarea {
   padding: 0.5rem 0;
 }
 
+.chat-mic-btn {
+  flex: 0 0 auto;
+  width: 38px;
+  padding: 0.4rem;
+  color: var(--text-secondary);
+  transition: color 0.2s, background 0.2s, box-shadow 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.chat-mic-btn:hover {
+  color: var(--accent-primary);
+}
+
+.chat-mic-btn.voice-listening {
+  color: #22c55e;
+  box-shadow: 0 0 8px rgba(34, 197, 94, 0.5);
+  animation: mic-pulse 1.2s ease-in-out infinite;
+}
+
+.chat-mic-btn.voice-processing {
+  color: var(--accent-primary);
+  box-shadow: 0 0 8px rgba(59, 130, 246, 0.5);
+}
+
+.chat-mic-btn.voice-speaking {
+  color: #f59e0b;
+  box-shadow: 0 0 8px rgba(245, 158, 11, 0.5);
+}
+
+@keyframes mic-pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.15); }
+}
+
 .system-line {
   color: var(--text-secondary);
   text-align: center;
@@ -2098,6 +2134,132 @@ textarea {
 .mem-more-btn:hover {
   border-color: var(--accent-primary);
   color: var(--accent-primary);
+}
+
+/* ── War Room / Agents 面板 ── */
+.warroom-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.4rem;
+  margin-bottom: 0.6rem;
+}
+
+.warroom-stat {
+  border: 1px solid var(--panel-border);
+  padding: 0.35rem 0.45rem;
+  background: rgba(255,255,255,0.02);
+}
+
+.warroom-stat-label {
+  display: block;
+  font-size: 0.52rem;
+  color: var(--text-secondary);
+  letter-spacing: 0.08em;
+}
+
+.warroom-stat-value {
+  display: block;
+  font-size: 0.78rem;
+  color: var(--text-primary);
+  margin-top: 0.15rem;
+}
+
+.warroom-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.warroom-refresh,
+.warroom-action-btn,
+.warroom-queue-btn {
+  background: transparent;
+  border: 1px solid var(--panel-border);
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 0.58rem;
+  padding: 0.28rem 0.5rem;
+  cursor: pointer;
+}
+
+.warroom-refresh:hover,
+.warroom-action-btn:hover,
+.warroom-queue-btn:hover {
+  color: var(--accent-primary);
+  border-color: var(--accent-primary);
+}
+
+.warroom-health {
+  font-size: 0.58rem;
+  color: var(--text-secondary);
+}
+
+.warroom-list,
+.warroom-queue-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.warroom-card,
+.warroom-queue-item {
+  border: 1px solid rgba(255,255,255,0.08);
+  background: rgba(255,255,255,0.02);
+  padding: 0.45rem;
+}
+
+.warroom-card-header,
+.warroom-queue-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.warroom-agent-name,
+.warroom-queue-agent {
+  font-size: 0.68rem;
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.warroom-agent-status {
+  font-size: 0.54rem;
+  letter-spacing: 0.08em;
+}
+
+.warroom-agent-status.running { color: #4ade80; }
+.warroom-agent-status.idle { color: var(--text-secondary); }
+.warroom-agent-status.paused { color: #f59e0b; }
+
+.warroom-meta,
+.warroom-queue-meta,
+.warroom-queue-preview,
+.warroom-empty {
+  font-size: 0.56rem;
+  color: var(--text-secondary);
+  margin-top: 0.28rem;
+}
+
+.warroom-actions,
+.warroom-queue-actions {
+  display: flex;
+  gap: 0.35rem;
+  margin-top: 0.4rem;
+}
+
+.warroom-section-title {
+  font-size: 0.58rem;
+  color: var(--accent-primary);
+  letter-spacing: 0.1em;
+  margin: 0.6rem 0 0.35rem;
+}
+
+.warroom-queue-btn.reject:hover {
+  color: #f87171;
+  border-color: #f87171;
 }
 
 /* ── 排程面板 (Schedule) ── */

@@ -4,24 +4,50 @@ import { Router } from 'express';
 import multer from 'multer';
 import os from 'os';
 import path from 'path';
+import fs from 'fs';
 import { execFile } from 'child_process';
-import { unlink } from 'fs/promises';
-import { gwRequest } from '../gateway.js';
-import { addVoiceHandler, removeVoiceHandler } from '../sse.js';
+import { unlink, readFile } from 'fs/promises';
 import { ttsSentence, splitSentences, getCurrentVoice } from '../tts.js';
 
 const router = Router();
 const upload = multer({ dest: os.tmpdir(), limits: { fileSize: 10 * 1024 * 1024 } });
 const WHISPER_MODEL = path.join(os.homedir(), '.whisper-models', 'ggml-base.bin');
+const WARROOM_URL = process.env.WARROOM_URL || 'http://127.0.0.1:8888';
 
-function whisperTranscribe(audioPath, lang = 'zh') {
-  return new Promise((resolve, reject) => {
-    execFile('whisper-cli', ['-m', WHISPER_MODEL, '-f', audioPath, '-l', lang, '--no-timestamps', '-nt'],
-      { timeout: 15000 }, (err, stdout) => {
-        if (err) return reject(err);
-        resolve(stdout.trim());
-      });
+function resolveOpenAiKey() {
+  if (process.env.OPENAI_API_KEY) return process.env.OPENAI_API_KEY;
+  const fallbackEnv = '/Users/flapkap/Documents/propelbd-jarvis/.env';
+  if (!fs.existsSync(fallbackEnv)) return '';
+  const match = fs.readFileSync(fallbackEnv, 'utf8').match(/^OPENAI_API_KEY=(.+)$/m);
+  return match?.[1]?.trim() || '';
+}
+
+async function whisperTranscribe(audioPath, lang = 'en') {
+  const apiKey = resolveOpenAiKey();
+  if (!apiKey) {
+    throw new Error('OPENAI_API_KEY not configured for transcription fallback');
+  }
+
+  const form = new FormData();
+  const audio = await readFile(audioPath);
+  form.append('file', new Blob([audio], { type: 'audio/wav' }), 'voice.wav');
+  form.append('model', 'whisper-1');
+  form.append('language', lang);
+  form.append('response_format', 'json');
+
+  const resp = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${apiKey}` },
+    body: form,
   });
+
+  if (!resp.ok) {
+    const body = await resp.text();
+    throw new Error(`Whisper fallback failed: ${resp.status} ${body.slice(0, 200)}`);
+  }
+
+  const data = await resp.json();
+  return (data.text || '').trim();
 }
 
 // 訊息計數（共用）
@@ -39,7 +65,7 @@ router.post('/voice', upload.single('audio'), async (req, res) => {
   const audioPath = req.file.path;
 
   try {
-    const transcript = await whisperTranscribe(audioPath);
+    const transcript = await whisperTranscribe(audioPath, 'en');
     if (!transcript) { send({ type: 'error', message: '無法辨識語音' }); send({ type: 'done' }); res.end(); return; }
 
     send({ type: 'transcript', text: transcript });
@@ -49,85 +75,96 @@ router.post('/voice', upload.single('audio'), async (req, res) => {
     if (today !== msgCountDate) { msgCountToday = 0; msgCountDate = today; }
     msgCountToday++;
 
-    const idempotencyKey = `voice-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const voice = getCurrentVoice();
-
-    const responseText = await new Promise((resolve, reject) => {
-      let fullText = '';
-      let sentenceBuffer = '';
-      let currentRunId = null;
-      let ttsQueue = [];
-      let ttsRunning = false;
-
-      const processTtsQueue = async () => {
-        if (ttsRunning) return;
-        ttsRunning = true;
-        while (true) {
-          const sentence = ttsQueue.shift();
-          if (!sentence) break;
-          try {
-            const audioBuffer = await ttsSentence(sentence, voice);
-            const base64 = audioBuffer.toString('base64');
-            send({ type: 'tts-chunk', audio: base64, contentType: 'audio/mp4', text: sentence });
-          } catch (err) { console.error('[VOICE] TTS 失敗:', err.message); }
-        }
-        ttsRunning = false;
-        if (ttsQueue.length > 0) processTtsQueue();
-      };
-
-      const handler = (payload) => {
-        const text = (() => {
-          if (!payload.message?.content) return '';
-          const c = payload.message.content;
-          if (Array.isArray(c)) return c.filter(x => x.type === 'text').map(x => x.text).join('');
-          return typeof c === 'string' ? c : '';
-        })();
-
-        if (!currentRunId && payload.runId) currentRunId = payload.runId;
-        if (currentRunId && payload.runId !== currentRunId) return;
-
-        if (payload.state === 'streaming' || payload.state === 'final') {
-          const newChars = text.slice(fullText.length);
-          fullText = text;
-          if (newChars) {
-            send({ type: 'text-chunk', text: newChars });
-            sentenceBuffer += newChars;
-            const sentences = splitSentences(sentenceBuffer);
-            if (sentences.length > 1) {
-              const complete = sentences.slice(0, -1);
-              sentenceBuffer = sentences[sentences.length - 1];
-              ttsQueue.push(...complete);
-              processTtsQueue();
-            }
-          }
-        }
-
-        if (payload.state === 'final' || payload.state === 'aborted') {
-          if (sentenceBuffer.trim()) ttsQueue.push(sentenceBuffer.trim());
-          processTtsQueue().then(() => { removeVoiceHandler(handler); resolve(fullText); });
-        }
-      };
-
-      addVoiceHandler(handler);
-
-      gwRequest('chat.send', {
-        message: transcript, sessionKey: req.app.locals.sessionKey,
-        idempotencyKey, deliver: false,
-      }).catch((err) => { removeVoiceHandler(handler); reject(err); });
-
-      setTimeout(() => {
-        removeVoiceHandler(handler);
-        if (sentenceBuffer.trim()) { ttsQueue.push(sentenceBuffer.trim()); processTtsQueue().then(() => resolve(fullText)); }
-        else resolve(fullText);
-      }, 60000);
+    const chatResp = await fetch(`${WARROOM_URL}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: transcript }),
     });
+
+    if (!chatResp.ok) {
+      const body = await chatResp.text();
+      throw new Error(`War Room chat failed: ${chatResp.status} ${body.slice(0, 200)}`);
+    }
+
+    const chatData = await chatResp.json();
+    const responseText = (chatData.reply || '').trim();
+    if (!responseText) {
+      send({ type: 'done', fullText: '' });
+      return;
+    }
+
+    send({ type: 'text-chunk', text: responseText });
+
+    // Generate all TTS chunks in PARALLEL — no gaps between sentences
+    const sentences = splitSentences(responseText);
+    const ttsPromises = sentences.map(s => ttsSentence(s, voice).catch(() => null));
+    for (const promise of ttsPromises) {
+      const result = await promise;
+      if (result && result.buffer && result.buffer.length > 0) {
+        send({ type: 'tts-chunk', audio: result.buffer.toString('base64'), contentType: result.contentType, text: '' });
+      }
+    }
 
     send({ type: 'done', fullText: responseText });
   } catch (err) {
-    console.error('[VOICE] 錯誤:', err);
+    console.error('[VOICE] Error:', err);
     send({ type: 'error', message: err.message });
   } finally {
     try { await unlink(audioPath); } catch {}
+    res.end();
+  }
+});
+
+// Text-based voice: accepts pre-transcribed text (from browser Web Speech API)
+// Returns same NDJSON stream as /api/voice but skips Whisper entirely
+router.post('/voice/text', async (req, res) => {
+  const transcript = (req.body?.text || '').trim();
+  if (!transcript) return res.status(400).json({ error: 'text required' });
+
+  res.writeHead(200, {
+    'Content-Type': 'application/x-ndjson', 'Cache-Control': 'no-cache', 'Transfer-Encoding': 'chunked',
+  });
+
+  const send = (obj) => res.write(JSON.stringify(obj) + '\n');
+
+  try {
+    send({ type: 'transcript', text: transcript });
+    console.log(`[VOICE/TEXT] "${transcript}"`);
+
+    const voice = getCurrentVoice();
+    const chatResp = await fetch(`${WARROOM_URL}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: transcript }),
+    });
+
+    if (!chatResp.ok) {
+      const body = await chatResp.text();
+      throw new Error(`War Room chat failed: ${chatResp.status} ${body.slice(0, 200)}`);
+    }
+
+    const chatData = await chatResp.json();
+    const responseText = (chatData.reply || '').trim();
+    if (!responseText) { send({ type: 'done', fullText: '' }); res.end(); return; }
+
+    send({ type: 'text-chunk', text: responseText });
+
+    // Parallel TTS — all sentences start generating simultaneously
+    const sentences = splitSentences(responseText);
+    const ttsPromises = sentences.map(s => ttsSentence(s, voice).catch(() => null));
+    for (const promise of ttsPromises) {
+      const result = await promise;
+      if (result && result.buffer && result.buffer.length > 0) {
+        send({ type: 'tts-chunk', audio: result.buffer.toString('base64'), contentType: result.contentType, text: '' });
+      }
+    }
+
+    send({ type: 'done', fullText: responseText });
+  } catch (err) {
+    console.error('[VOICE/TEXT] Error:', err);
+    send({ type: 'error', message: err.message });
+  } finally {
     res.end();
   }
 });

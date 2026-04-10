@@ -1,231 +1,311 @@
-// ── 語音對話模組 ──
-// VAD（語音活動偵測）+ 自動錄音 + 打斷功能
+// ── JARVIS Voice — WebSocket streaming + Web Audio API gapless playback ──
+//
+// Architecture:
+//   Chrome Web Speech API (STT) → WS proxy → War Room /ws/voice
+//   War Room → Kokoro TTS (local, high-quality) → WAV chunks → browser
+//   Browser: Web Audio API schedules chunks back-to-back with ZERO gap
+//
+// Key improvements over HTML Audio element:
+//   - AudioContext.decodeAudioData + scheduled BufferSourceNode = gapless
+//   - All chunks pre-scheduled on audio timeline, no gaps between sentences
 
-import { MicVAD, utils } from '@ricky0123/vad-web';
-
-let vad = null;
+let ws = null;
 let isVoiceMode = false;
-let isProcessing = false;  // 正在處理語音（避免重複送出）
-let playbackQueue = [];     // TTS 音訊播放佇列
-let currentAudio = null;    // 正在播放的音訊
-let isPlaying = false;
+let recognition = null;
+let isProcessing = false;
+let isSpeaking = false;
+let pendingTranscript = '';
+let silenceTimer = null;
+let fullResponseText = '';
 
-// ── 狀態回調 ──
-let onStateChange = null;   // (state: 'idle'|'listening'|'processing'|'speaking') => void
+let onStateChange = null;
+
+const SILENCE_DELAY_MS = 850; // ms pause before sending to Jarvis
+
+// ── Web Audio API state ──
+let audioCtx = null;
+let nextStartTime = 0;       // When next chunk should start on audio timeline
+let scheduledCount = 0;      // Chunks scheduled but not yet played
+let audioGeneration = 0;     // Incremented on stop to invalidate callbacks
+
+function getAudioCtx() {
+  if (!audioCtx || audioCtx.state === 'closed') {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    nextStartTime = audioCtx.currentTime;
+  }
+  return audioCtx;
+}
+
+function wsUrl() {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  return `${proto}//${location.host}/ws/voice`;
+}
 
 function setState(state) {
   if (onStateChange) onStateChange(state);
-  // 同步 orb 視覺
   window.dispatchEvent(new CustomEvent('voice-state', { detail: state }));
 }
 
-// ── VAD 初始化 ──
+// ── WebSocket ──
 
-async function initVAD() {
-  vad = await MicVAD.new({
-    model: 'v5',
-    baseAssetPath: '/vad/',
-    onnxWASMBasePath: '/vad/',
-    positiveSpeechThreshold: 0.8,
-    negativeSpeechThreshold: 0.3,
-    minSpeechFrames: 5,
-    preSpeechPadFrames: 10,
-    redemptionFrames: 8,
+function connectWS() {
+  if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) return;
 
-    onSpeechStart: () => {
-      console.log('[VOICE] 偵測到說話');
-      // 打斷：如果 AI 正在播放語音，立刻停止
-      if (isPlaying) {
-        console.log('[VOICE] 打斷播放');
-        stopPlayback();
-      }
-      setState('listening');
-    },
+  ws = new WebSocket(wsUrl());
+  const pending = [];
 
-    onSpeechEnd: async (audioData) => {
-      console.log('[VOICE] 說話結束，送出音訊');
-      if (isProcessing) return; // 上一段還在處理
+  ws.onopen = () => {
+    console.log('[VOICE] WS connected');
+    for (const msg of pending) ws.send(msg);
+    pending.length = 0;
+  };
 
-      isProcessing = true;
-      setState('processing');
+  ws.onmessage = (e) => {
+    try { handleWSMessage(JSON.parse(e.data)); } catch {}
+  };
 
-      try {
-        // Float32Array 16kHz → WAV
-        const wavBuffer = utils.encodeWAV(audioData);
-        const blob = new Blob([wavBuffer], { type: 'audio/wav' });
+  ws.onclose = () => {
+    ws = null;
+    if (isVoiceMode) setTimeout(connectWS, 1500);
+  };
 
-        // 送到 server
-        await sendVoice(blob);
-      } catch (err) {
-        console.error('[VOICE] 處理失敗:', err);
-        setState('listening');
-      } finally {
-        isProcessing = false;
-      }
-    },
+  ws.onerror = () => ws?.close();
 
-    onVADMisfire: () => {
-      console.log('[VOICE] VAD misfire（太短）');
-      setState('listening');
-    },
-  });
+  // Attach pending buffer to ws so sendToJarvis can use it
+  ws._pending = pending;
 }
 
-// ── 送出語音到 server ──
+function handleWSMessage(data) {
+  const type = data.type;
 
-async function sendVoice(audioBlob) {
-  const formData = new FormData();
-  formData.append('audio', audioBlob, 'voice.wav');
-
-  // 使用 SSE 接收句子級 TTS 回應
-  const res = await fetch('/api/voice', {
-    method: 'POST',
-    body: formData,
-  });
-
-  if (!res.ok) {
-    console.error('[VOICE] API 錯誤:', res.status);
-    setState('listening');
-    return;
+  if (type === 'text_chunk' || type === 'text-chunk') {
+    const chunk = (data.text || '').trim();
+    if (!chunk) return;
+    fullResponseText += (fullResponseText ? ' ' : '') + chunk;
+    window.dispatchEvent(new CustomEvent('voice-response-text', { detail: chunk }));
+    window.dispatchEvent(new CustomEvent('agent-state', { detail: 'responding' }));
   }
 
-  // 回應是 NDJSON 串流（每行一個 TTS 片段）
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-
-  setState('speaking');
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split('\n');
-    buffer = lines.pop(); // 最後一行可能不完整
-
-    for (const line of lines) {
-      if (!line.trim()) continue;
-      try {
-        const data = JSON.parse(line);
-
-        if (data.type === 'transcript') {
-          // 顯示使用者說的話
-          window.dispatchEvent(new CustomEvent('voice-transcript', { detail: data.text }));
-        }
-
-        if (data.type === 'tts-chunk') {
-          // 收到一段 TTS 音訊（base64）
-          queueAudio(data.audio, data.contentType || 'audio/mp4');
-        }
-
-        if (data.type === 'text-chunk') {
-          // 文字回應（給 chat 面板顯示用）
-          window.dispatchEvent(new CustomEvent('voice-response-text', { detail: data.text }));
-        }
-
-        if (data.type === 'done') {
-          console.log('[VOICE] 回應完成');
-        }
-
-        if (data.type === 'error') {
-          console.error('[VOICE] Server error:', data.message);
-        }
-      } catch {}
+  else if (type === 'tts_chunk' || type === 'tts-chunk') {
+    if (data.audio) {
+      const ct = data.contentType || data.content_type || 'audio/mpeg';
+      scheduleAudioChunk(data.audio, ct);
     }
   }
 
-  // 等播放完才回到 listening
-  await waitPlaybackDone();
-  if (isVoiceMode) setState('listening');
+  else if (type === 'done') {
+    waitAudioDone().then(() => {
+      isSpeaking = false;
+      isProcessing = false;
+      fullResponseText = '';
+      if (isVoiceMode) {
+        setState('listening');
+        window.dispatchEvent(new CustomEvent('agent-state', { detail: 'idle' }));
+        pendingTranscript = '';
+        try { recognition?.start(); } catch {}
+      }
+    });
+  }
+
+  else if (type === 'error') {
+    console.warn('[VOICE] Backend error:', data.text || data.message);
+    isSpeaking = false;
+    isProcessing = false;
+    fullResponseText = '';
+    if (isVoiceMode) {
+      setState('listening');
+      try { recognition?.start(); } catch {}
+    }
+  }
 }
 
-// ── 音訊播放佇列 ──
+// ── Web Audio API gapless playback ──
 
-function queueAudio(base64, contentType) {
+async function scheduleAudioChunk(base64, contentType) {
+  const gen = audioGeneration;
+
+  // Decode base64
   const binary = atob(base64);
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  const blob = new Blob([bytes], { type: contentType });
-  const url = URL.createObjectURL(blob);
 
-  playbackQueue.push(url);
-  if (!isPlaying) playNext();
-}
+  const ctx = getAudioCtx();
 
-function playNext() {
-  if (playbackQueue.length === 0) {
-    isPlaying = false;
-    return;
+  // Resume if browser suspended (autoplay policy)
+  if (ctx.state === 'suspended') await ctx.resume();
+
+  try {
+    // decodeAudioData requires a copy of the ArrayBuffer
+    const audioBuffer = await ctx.decodeAudioData(bytes.buffer.slice(0));
+
+    if (gen !== audioGeneration) return; // stopped since we started decoding
+
+    const source = ctx.createBufferSource();
+    source.buffer = audioBuffer;
+    source.connect(ctx.destination);
+
+    // Schedule: start exactly when previous chunk ends (tiny 20ms lookahead for safety)
+    const now = ctx.currentTime;
+    const startAt = nextStartTime < now + 0.02 ? now + 0.02 : nextStartTime;
+    source.start(startAt);
+    nextStartTime = startAt + audioBuffer.duration;
+    scheduledCount++;
+
+    if (isSpeaking) setState('speaking');
+
+    source.onended = () => {
+      if (gen === audioGeneration) scheduledCount = Math.max(0, scheduledCount - 1);
+    };
+  } catch (e) {
+    console.warn('[VOICE] Audio decode error:', e.message);
   }
-
-  isPlaying = true;
-  const url = playbackQueue.shift();
-  currentAudio = new Audio(url);
-  currentAudio.onended = () => {
-    URL.revokeObjectURL(url);
-    currentAudio = null;
-    playNext();
-  };
-  currentAudio.onerror = () => {
-    console.error('[VOICE] 音訊播放失敗');
-    URL.revokeObjectURL(url);
-    currentAudio = null;
-    playNext();
-  };
-  currentAudio.play().catch(() => playNext());
 }
 
-function stopPlayback() {
-  if (currentAudio) {
-    currentAudio.pause();
-    currentAudio.onended = null;
-    currentAudio = null;
+function stopAudio() {
+  clearTimeout(silenceTimer);
+  audioGeneration++;     // invalidate all pending decode callbacks
+  scheduledCount = 0;
+  // Close context to immediately stop all scheduled audio
+  if (audioCtx) {
+    audioCtx.close().catch(() => {});
+    audioCtx = null;
   }
-  // 清空佇列
-  playbackQueue.forEach(url => URL.revokeObjectURL(url));
-  playbackQueue = [];
-  isPlaying = false;
+  nextStartTime = 0;
 }
 
-function waitPlaybackDone() {
-  return new Promise((resolve) => {
+function waitAudioDone() {
+  return new Promise(resolve => {
+    const gen = audioGeneration;
     const check = () => {
-      if (!isPlaying && playbackQueue.length === 0) return resolve();
-      setTimeout(check, 200);
+      if (gen !== audioGeneration) { resolve(); return; }
+      const ctx = audioCtx;
+      if (!ctx || scheduledCount === 0 || nextStartTime <= ctx.currentTime + 0.05) {
+        resolve();
+      } else {
+        setTimeout(check, 50);
+      }
     };
     check();
   });
 }
 
-// ── 公開 API ──
+// ── STT — Chrome Web Speech API ──
+
+function buildRecognition() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) return null;
+
+  const r = new SR();
+  r.lang = 'en-US';
+  r.continuous = true;
+  r.interimResults = true;
+  r.maxAlternatives = 1;
+
+  r.onresult = (event) => {
+    if (isProcessing || isSpeaking) return;
+
+    clearTimeout(silenceTimer);
+
+    for (let i = event.resultIndex; i < event.results.length; i++) {
+      if (event.results[i].isFinal) {
+        pendingTranscript += (pendingTranscript ? ' ' : '') + event.results[i][0].transcript.trim();
+      }
+    }
+
+    if (!pendingTranscript) return;
+
+    silenceTimer = setTimeout(() => {
+      const text = pendingTranscript.trim();
+      pendingTranscript = '';
+      if (text.length < 2) return;
+      sendToJarvis(text);
+    }, SILENCE_DELAY_MS);
+  };
+
+  r.onerror = (e) => {
+    if (e.error === 'no-speech' || e.error === 'aborted') return;
+    if (e.error === 'not-allowed') {
+      window.dispatchEvent(new CustomEvent('voice-error', {
+        detail: 'Microphone access denied. Click the address bar mic icon to allow.',
+      }));
+      isVoiceMode = false;
+      setState('idle');
+      return;
+    }
+    console.warn('[VOICE] STT error:', e.error);
+  };
+
+  r.onend = () => {
+    if (isVoiceMode && !isProcessing) {
+      try { recognition?.start(); } catch {}
+    }
+  };
+
+  return r;
+}
+
+// ── Send to War Room via WebSocket ──
+
+function sendToJarvis(text) {
+  console.log('[VOICE] →', text);
+
+  isProcessing = true;
+  isSpeaking = true;
+  fullResponseText = '';
+  setState('processing');
+  try { recognition?.stop(); } catch {}
+
+  window.dispatchEvent(new CustomEvent('voice-transcript', { detail: text }));
+  window.dispatchEvent(new CustomEvent('agent-state', { detail: 'thinking' }));
+
+  const msg = JSON.stringify({ text });
+
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    connectWS();
+    // Buffer message — flushed in ws.onopen
+    if (ws?._pending) ws._pending.push(msg);
+    return;
+  }
+
+  ws.send(msg);
+}
+
+// ── Public API ──
 
 export async function startVoiceMode() {
   if (isVoiceMode) return;
-  console.log('[VOICE] 啟動語音模式');
+
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) {
+    window.dispatchEvent(new CustomEvent('voice-error', {
+      detail: 'Voice not supported. Use Chrome or Edge.',
+    }));
+    return;
+  }
+
+  isVoiceMode = true;
+  connectWS();
+  recognition = buildRecognition();
 
   try {
-    if (!vad) await initVAD();
-    await vad.start();
-    isVoiceMode = true;
+    recognition.start();
     setState('listening');
+    console.log('[VOICE] Active — Web Audio API + Kokoro TTS');
   } catch (err) {
-    console.error('[VOICE] 啟動失敗:', err);
-    // 通知 UI
-    window.dispatchEvent(new CustomEvent('voice-error', {
-      detail: err.name === 'NotAllowedError' ? '麥克風權限被拒絕' : `語音模式啟動失敗: ${err.message}`
-    }));
+    console.error('[VOICE] Failed to start:', err);
+    isVoiceMode = false;
     setState('idle');
   }
 }
 
 export async function stopVoiceMode() {
-  if (!isVoiceMode) return;
-  console.log('[VOICE] 關閉語音模式');
-
   isVoiceMode = false;
-  if (vad) await vad.pause();
-  stopPlayback();
+  clearTimeout(silenceTimer);
+  pendingTranscript = '';
+  try { recognition?.stop(); } catch {}
+  recognition = null;
+  stopAudio();
+  if (ws) { ws.close(); ws = null; }
   setState('idle');
 }
 
@@ -233,10 +313,5 @@ export function toggleVoiceMode() {
   return isVoiceMode ? stopVoiceMode() : startVoiceMode();
 }
 
-export function isVoiceActive() {
-  return isVoiceMode;
-}
-
-export function setOnStateChange(cb) {
-  onStateChange = cb;
-}
+export function isVoiceActive() { return isVoiceMode; }
+export function setOnStateChange(cb) { onStateChange = cb; }

@@ -10,7 +10,7 @@ import { initAudio, initAudioControls, getAnalyser, getAudioData, getFrequencyDa
 import { initFloatingParticles } from './core/particles.js';
 
 // 元件
-import { initChat, updateUserActivity } from './components/chat.js';
+import { initChat, updateUserActivity, addChatLine } from './components/chat.js';
 import { showNotification } from './components/notifications.js';
 import { initSystemMonitor } from './components/system-monitor.js';
 import { initTabs } from './components/tabs.js';
@@ -18,6 +18,7 @@ import { initTasks } from './components/tasks.js';
 import { initSkills } from './components/skills.js';
 import { initMemory } from './components/memory.js';
 import { initSchedule } from './components/schedule.js';
+import { initWarroom } from './components/warroom.js';
 import { initControls, setCallbacks, getAudioReactivity, getAudioSensitivity } from './components/controls.js';
 import { initSpectrumCollapse, drawSpectrumAnalyzer, drawCircularVisualizer, drawWaveform, initVisualizers, resizeAllCanvases } from './components/spectrum.js';
 import { setupPreloader } from './components/preloader.js';
@@ -27,6 +28,7 @@ import { initOrbMessages } from './components/orb-messages.js';
 import { initThoughtStream } from './components/thought-stream.js';
 import { initMobileToolbar } from './components/mobile-toolbar.js';
 import { initPowerSave, isPowerSave } from './components/powersave.js';
+import { startVoiceMode, toggleVoiceMode, isVoiceActive, setOnStateChange } from './components/voice.js';
 
 document.addEventListener('DOMContentLoaded', async function () {
   // 載入設定
@@ -55,6 +57,7 @@ document.addEventListener('DOMContentLoaded', async function () {
   initSkills();
   initMemory();
   initSchedule();
+  initWarroom();
   initControls();
   initPowerSave();
   initSpectrumCollapse();
@@ -142,6 +145,69 @@ document.addEventListener('DOMContentLoaded', async function () {
       initOrbMessages(getOrbScreenPosition);
       initThoughtStream();
       initMobileToolbar();
+
+      // ── Voice Setup — War Room WebSocket (Deepgram STT + ElevenLabs TTS + full memory) ──
+      const micBtn = document.getElementById('chat-mic');
+      const chatInput = document.getElementById('chat-input');
+
+      let voiceStarted = false;
+
+      setOnStateChange((state) => {
+        if (!micBtn) return;
+        micBtn.classList.remove('voice-listening', 'voice-processing', 'voice-speaking');
+        if (state === 'listening') {
+          micBtn.classList.add('voice-listening');
+          micBtn.title = 'LISTENING (click to stop)';
+        } else if (state === 'processing') {
+          micBtn.classList.add('voice-processing');
+          micBtn.title = 'PROCESSING...';
+        } else if (state === 'speaking') {
+          micBtn.classList.add('voice-speaking');
+          micBtn.title = 'SPEAKING';
+        } else {
+          micBtn.title = 'CLICK TO START VOICE';
+        }
+      });
+
+      micBtn?.addEventListener('click', () => toggleVoiceMode());
+
+      async function autoStartVoice() {
+        if (voiceStarted) return;
+        voiceStarted = true;
+        document.removeEventListener('click', autoStartVoice);
+        document.removeEventListener('keydown', autoStartVoice);
+        await startVoiceMode();
+      }
+      document.addEventListener('click', autoStartVoice, { once: true });
+      document.addEventListener('keydown', autoStartVoice, { once: true });
+
+      // Voice transcript → show in chat as user message
+      window.addEventListener('voice-transcript', (e) => {
+        const text = e.detail?.trim();
+        if (!text) return;
+        if (chatInput) chatInput.value = '';
+        addChatLine(text, 'user-line');
+        window.dispatchEvent(new CustomEvent('agent-state', { detail: 'thinking' }));
+      });
+
+      // Voice response → show in chat as Jarvis message
+      window.addEventListener('voice-response-text', (e) => {
+        const text = e.detail?.trim();
+        if (!text) return;
+        addChatLine(text, 'jin-line');
+        window.dispatchEvent(new CustomEvent('agent-state', { detail: 'responding' }));
+      });
+
+      // Orb state sync
+      window.addEventListener('voice-state', (e) => {
+        if (e.detail === 'listening') window.dispatchEvent(new CustomEvent('agent-state', { detail: 'idle' }));
+      });
+
+      // Voice error notification
+      window.addEventListener('voice-error', (e) => {
+        showNotification(e.detail || 'Voice mode failed', 'error');
+      });
+
     }, 500);
   }, 3000);
 

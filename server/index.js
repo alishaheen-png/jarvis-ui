@@ -5,6 +5,8 @@ import path from 'path';
 import os from 'os';
 import { readFile } from 'fs/promises';
 import { fileURLToPath } from 'url';
+import { createServer } from 'http';
+import { WebSocketServer, WebSocket as WsClient } from 'ws';
 
 import { initGateway, gwRequest } from './gateway.js';
 import { addClient, removeClient, broadcastChat } from './sse.js';
@@ -20,6 +22,10 @@ import skillsRoutes from './routes/skills.js';
 import memoryRoutes from './routes/memory.js';
 import scheduleRoutes from './routes/schedule.js';
 import voiceRoutes from './routes/voice.js';
+import warroomRoutes from './routes/warroom.js';
+// Vapi removed — voice goes through War Room /ws/voice
+// WhatsApp loaded dynamically to prevent crash on import failure
+let whatsappRoutes = null;
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..');
@@ -39,6 +45,9 @@ const PORT = process.env.PORT || config.server.port;
 const SERVE_STATIC = process.env.SERVE_STATIC !== 'false';
 const SESSION_KEY = config.agent.sessionKey;
 const OC_CONFIG = path.join(os.homedir(), '.openclaw', 'openclaw.json');
+
+// War Room address (where /ws/voice lives)
+const WARROOM_WS = process.env.WARROOM_WS || 'ws://127.0.0.1:8888';
 
 // ── Express ──
 const app = express();
@@ -67,6 +76,16 @@ app.use('/api', skillsRoutes);
 app.use('/api', memoryRoutes);
 app.use('/api', scheduleRoutes);
 app.use('/api', voiceRoutes);
+app.use('/api', warroomRoutes);
+// Load WhatsApp dynamically — if it fails, server still starts
+try {
+  const waMod = await import('./routes/whatsapp.js');
+  whatsappRoutes = waMod.default;
+  app.use('/api', whatsappRoutes);
+  console.log('[JARVIS] WhatsApp routes loaded');
+} catch (e) {
+  console.warn('[JARVIS] WhatsApp routes failed to load:', e.message);
+}
 
 // ── 靜態檔案 ──
 if (SERVE_STATIC) {
@@ -80,7 +99,64 @@ initTTS(config.tts);
 initGateway({ url: GATEWAY_URL, token: GATEWAY_TOKEN, sessionKey: SESSION_KEY, onChat: broadcastChat });
 startSystemMonitor();
 
-app.listen(PORT, () => {
+// ── HTTP server + WebSocket proxy ──
+const httpServer = createServer(app);
+
+// WebSocket proxy: /ws/voice → War Room ws/voice (streaming LLM+TTS)
+const wss = new WebSocketServer({ server: httpServer, path: '/ws/voice' });
+
+wss.on('connection', (clientWs, req) => {
+  console.log('[JARVIS] /ws/voice client connected — proxying to War Room');
+
+  const upstream = new WsClient(`${WARROOM_WS}/ws/voice`);
+  const pendingMessages = []; // buffer messages until upstream connects
+
+  upstream.on('open', () => {
+    console.log('[JARVIS] /ws/voice upstream connected');
+    // Flush buffered messages
+    for (const { msg, isBinary } of pendingMessages) upstream.send(msg, { binary: isBinary });
+    pendingMessages.length = 0;
+  });
+
+  // Browser → War Room
+  clientWs.on('message', (msg, isBinary) => {
+    if (upstream.readyState === WsClient.OPEN) {
+      upstream.send(msg, { binary: isBinary });
+    } else {
+      pendingMessages.push({ msg, isBinary }); // buffer until open
+    }
+  });
+
+  // War Room → Browser
+  upstream.on('message', (msg, isBinary) => {
+    if (clientWs.readyState === WsClient.OPEN) {
+      clientWs.send(msg, { binary: isBinary });
+    }
+  });
+
+  upstream.on('close', (code, reason) => {
+    if (clientWs.readyState === WsClient.OPEN) clientWs.close(code);
+  });
+
+  upstream.on('error', (err) => {
+    console.warn('[JARVIS] /ws/voice upstream error:', err.message);
+    if (clientWs.readyState === WsClient.OPEN) {
+      clientWs.send(JSON.stringify({ type: 'error', text: 'War Room unavailable' }));
+      clientWs.close();
+    }
+  });
+
+  clientWs.on('close', () => {
+    if (upstream.readyState === WsClient.OPEN || upstream.readyState === WsClient.CONNECTING) {
+      upstream.close();
+    }
+  });
+
+  clientWs.on('error', () => upstream.close());
+});
+
+httpServer.listen(PORT, () => {
   console.log(`[JARVIS] API server on http://localhost:${PORT}`);
+  console.log(`[JARVIS] /ws/voice → ${WARROOM_WS}/ws/voice`);
   if (SERVE_STATIC) console.log(`[JARVIS] Serving static files from dist/`);
 });

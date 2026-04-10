@@ -10,7 +10,7 @@ const router = Router();
 export default function statusRoutes(config, ocConfigPath) {
   // 前端設定
   router.get('/config', (req, res) => {
-    res.json({ name: config.name, agent: config.agent, theme: config.theme });
+    res.json({ name: config.name, agent: config.agent, theme: config.theme, vapi: config.vapi });
   });
 
   // 健康檢查

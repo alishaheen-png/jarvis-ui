@@ -197,6 +197,7 @@
       <button class="tab-btn-r active" data-rtab="tasks">TASKS</button>
       <button class="tab-btn-r" data-rtab="skills">SKILLS</button>
       <button class="tab-btn-r" data-rtab="memory">MEMORY</button>
+      <button class="tab-btn-r" data-rtab="agents">AGENTS</button>
       <button class="tab-btn-r" data-rtab="schedule">SCHEDULE</button>
       <button class="tab-btn-r" data-rtab="controls">CONTROLS</button>
     </div>
@@ -233,6 +234,11 @@
     <!-- MEMORY Tab -->
     <div class="rtab-content" id="rtab-memory">
       <!-- 由 memory.js 動態渲染 -->
+    </div>
+
+    <!-- AGENTS Tab -->
+    <div class="rtab-content" id="rtab-agents">
+      <!-- 由 warroom.js 動態渲染 -->
     </div>
 
     <!-- SCHEDULE Tab -->
@@ -352,7 +358,10 @@
       <div class="terminal-line system-line">CONNECTION ESTABLISHED. WELCOME BACK.</div>
     </div>
     <div class="chat-input-bar">
-      <input type="text" id="chat-input" class="chat-input" placeholder="TYPE A MESSAGE..." />
+      <button class="btn chat-mic-btn" id="chat-mic" title="VOICE MODE (click to speak)">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M12 1a4 4 0 0 1 4 4v7a4 4 0 0 1-8 0V5a4 4 0 0 1 4-4z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/><line x1="12" y1="19" x2="12" y2="23" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><line x1="8" y1="23" x2="16" y2="23" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      </button>
+      <input type="text" id="chat-input" class="chat-input" placeholder="TYPE A MESSAGE OR CLICK MIC TO SPEAK..." />
       <button class="btn chat-attach-btn" id="chat-attach" title="ATTACH FILE"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg></button>
       <button class="btn chat-send-btn" id="chat-send">SEND</button>
       <input type="file" id="chat-file-input" style="display:none" accept="image/*,.pdf,.txt,.js,.ts,.py,.json,.md,.csv,.html,.css,.xml,.yaml,.yml,.log,.sh,.sql" multiple />
