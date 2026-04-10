@@ -1,8 +1,10 @@
 FROM node:20-slim
 WORKDIR /app
-ARG CACHEBUST=1
 COPY package*.json ./
 RUN npm ci --omit=dev
-COPY . .
+COPY server/ ./server/
+COPY dist/ ./dist/
+COPY config.json ./
+COPY public/ ./public/
 ENV NODE_ENV=production
 CMD ["node", "server/index.js"]
