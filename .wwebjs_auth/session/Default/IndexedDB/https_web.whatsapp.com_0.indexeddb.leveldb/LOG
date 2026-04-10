@@ -79,3 +79,31 @@
 2026/04/10-09:41:38.314 e292 compacted to: files[ 0 0 1 0 0 0 0 ]
 2026/04/10-09:41:38.314 e292 Delete type=2 #139
 2026/04/10-09:41:38.314 e292 Manual compaction at level-1 from '\x002\x0a\x02\x03\x00\x00\x00\x00\x00\x00\x08@' @ 203032 : 0 .. '\x003\x00\x00\x00' @ 0 : 0; will stop at (end)
+2026/04/10-11:12:19.846 e295 Level-0 table #142: started
+2026/04/10-11:12:19.876 e295 Level-0 table #142: 1121924 bytes OK
+2026/04/10-11:12:19.879 e295 Delete type=0 #138
+2026/04/10-11:12:19.880 e295 Delete type=2 #137
+2026/04/10-11:13:05.793 e293 Compacting 1@1 + 1@2 files
+2026/04/10-11:13:05.843 e293 Generated table #143@1: 7386 keys, 458193 bytes
+2026/04/10-11:13:05.843 e293 Compacted 1@1 + 1@2 files => 458193 bytes
+2026/04/10-11:13:05.845 e293 compacted to: files[ 0 0 1 0 0 0 0 ]
+2026/04/10-11:13:05.845 e293 Delete type=2 #140
+2026/04/10-11:13:05.845 e293 Delete type=2 #142
+2026/04/10-12:08:35.996 e296 Level-0 table #145: started
+2026/04/10-12:08:36.023 e296 Level-0 table #145: 898173 bytes OK
+2026/04/10-12:08:36.027 e296 Delete type=0 #141
+2026/04/10-12:09:21.892 e293 Compacting 1@1 + 1@2 files
+2026/04/10-12:09:21.923 e293 Generated table #146@1: 10606 keys, 841031 bytes
+2026/04/10-12:09:21.923 e293 Compacted 1@1 + 1@2 files => 841031 bytes
+2026/04/10-12:09:21.926 e293 compacted to: files[ 0 0 1 0 0 0 0 ]
+2026/04/10-12:09:21.927 e293 Delete type=2 #143
+2026/04/10-12:09:21.927 e293 Delete type=2 #145
+2026/04/10-12:51:33.496 e293 Level-0 table #148: started
+2026/04/10-12:51:33.520 e293 Level-0 table #148: 811888 bytes OK
+2026/04/10-12:51:33.523 e293 Delete type=0 #144
+2026/04/10-12:53:53.798 e293 Compacting 1@1 + 1@2 files
+2026/04/10-12:53:53.846 e293 Generated table #149@1: 13168 keys, 1190740 bytes
+2026/04/10-12:53:53.846 e293 Compacted 1@1 + 1@2 files => 1190740 bytes
+2026/04/10-12:53:53.851 e293 compacted to: files[ 0 0 1 0 0 0 0 ]
+2026/04/10-12:53:53.851 e293 Delete type=2 #148
+2026/04/10-12:53:53.851 e293 Delete type=2 #146
